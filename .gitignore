@@ -4,3 +4,7 @@
 # Certificados gerados pelo wazuh-certs-generator
 config/wazuh_indexer_ssl_certs/*
 !config/wazuh_indexer_ssl_certs/.gitkeep
+
+# Gerados pelo start_lab.sh
+config/wazuh_indexer/internal_users.local.yml
+.env.bak

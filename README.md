@@ -1,6 +1,6 @@
 # Lab de Segurança — Docker Compose
 
-Rede `lab_net` → **10.200.50.0/24** por padrão (gateway .1). O `./up.sh` troca a faixa sozinho se ela já estiver em uso.
+Rede `lab_net` → **10.200.50.0/24** por padrão (gateway .1). O `./start_lab.sh` sugere uma faixa livre automaticamente.
 
 | Serviço          | Container        | IP           | Acesso pelo host                  | Login                                   |
 |------------------|------------------|--------------|-----------------------------------|-----------------------------------------|
@@ -17,7 +17,7 @@ Rede `lab_net` → **10.200.50.0/24** por padrão (gateway .1). O `./up.sh` troc
 
 **root** em Rocky, Debian, Ubuntu, Nginx, Metasploitable 2 e 3: `Root@2026!`
 O usuário `analista` tem `sudo` (grupo `wheel` no Rocky, `sudo` no Debian/Ubuntu).
-Todas as credenciais ficam no arquivo `.env` (criado a partir de `.env.example`, fora do git) — **troque antes de subir**.
+Todas as credenciais ficam no arquivo `.env` (criado pelo `start_lab.sh` ou copiado de `.env.example`, fora do git) — **troque antes de subir**.
 
 ## Requisitos
 - Docker + Docker Compose v2
@@ -28,15 +28,30 @@ Todas as credenciais ficam no arquivo `.env` (criado a partir de `.env.example`,
   echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf
   ```
 
-## Subindo (recomendado)
+## Subindo (recomendado): `start_lab.sh`
 ```bash
-./up.sh            # checa a rede, cria .env, gera certificados e sobe tudo
-./up.sh --check    # só verifica se a sub-rede está livre e mostra os IPs
+./start_lab.sh             # interativo
+./start_lab.sh --default   # automático: só confirma no final
+./start_lab.sh --check     # só mostra a rede sugerida e os IPs
 ```
-O Docker **não** procura uma faixa livre quando a sub-rede é fixa — ele só
-falha com `Pool overlaps with other one on this address space`. O `up.sh`
-compara `LAB_NET` com todas as redes Docker e com as rotas do host (LAN, VPN)
-e, se houver conflito, escolhe uma faixa livre e grava no `.env`.
+
+**Interativo** — o script:
+1. lista as faixas já em uso (redes Docker + rotas do host: LAN, VPN…)
+2. **sugere uma sub-rede livre**; Enter aceita, ou digite outra (ele valida conflito)
+3. pergunta o usuário local, a senha dele, a senha do root, o login do OpenVAS
+   e a senha do admin do Wazuh (Enter = gerar senha forte automaticamente)
+4. mostra o resumo (IPs, acessos, credenciais) e pede confirmação
+5. grava o `.env`, gera o hash da senha do Wazuh, os certificados e sobe tudo
+
+**`--default`** — faz tudo sozinho (faixa livre + senhas fortes aleatórias),
+mostra o resumo e só pergunta *"Gravar o .env e subir o lab agora? [S/n]"*.
+
+Rodando de novo, os valores do `.env` atual viram o padrão (o anterior fica em
+`.env.bak`). O Docker não procura faixa livre quando a sub-rede é fixa — sem o
+script ele só falha com `Pool overlaps with other one on this address space`.
+
+> A senha do admin do Wazuh só é aplicada na **primeira** inicialização do
+> indexer. Para trocá-la depois: `docker compose down -v` (apaga dados do Wazuh).
 
 ## Subindo manualmente
 ```bash
