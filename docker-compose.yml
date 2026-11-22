@@ -180,6 +180,34 @@ services:
         ipv4_address: ${LAB_NET}.30
 
   # ----------------------------------------------------------------
+  #  METASPLOITABLE 3 — Linux (Ubuntu 14.04)  — SEM portas publicadas
+  #  Base: https://github.com/rapid7/metasploitable3
+  #  Imagem Docker da comunidade: kirscht/metasploitable3-ub1404
+  #  Serviços: CUPS, ProFTPD, Apache, UnrealIRCd, Samba, SSH, MySQL
+  # ----------------------------------------------------------------
+  metasploitable3:
+    image: kirscht/metasploitable3-ub1404:latest
+    container_name: metasploitable3
+    hostname: metasploitable3
+    restart: unless-stopped
+    entrypoint: >
+      bash -c "echo 'root:${ROOT_PASS}' | chpasswd;
+               id ${LAB_USER} >/dev/null 2>&1 || useradd -m -s /bin/bash ${LAB_USER};
+               echo '${LAB_USER}:${LAB_PASS}' | chpasswd;
+               exec /entrypoint.sh"
+    environment:
+      - CUPS=yes
+      - FTP=yes
+      - HTTP=yes
+      - IRC=yes
+      - SMB=yes
+      - SSH=yes
+      - SQL=yes
+    networks:
+      lab_net:
+        ipv4_address: ${LAB_NET}.31
+
+  # ----------------------------------------------------------------
   #  NGINX (servidor web)
   # ----------------------------------------------------------------
   nginx:

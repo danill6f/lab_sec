@@ -1,6 +1,6 @@
 # Lab de Segurança — Docker Compose
 
-Rede `lab_net` → **10.200.50.0/24** (gateway 10.200.50.1)
+Rede `lab_net` → **10.200.50.0/24** por padrão (gateway .1). O `./up.sh` troca a faixa sozinho se ela já estiver em uso.
 
 | Serviço          | Container        | IP           | Acesso pelo host                  | Login                                   |
 |------------------|------------------|--------------|-----------------------------------|-----------------------------------------|
@@ -9,12 +9,13 @@ Rede `lab_net` → **10.200.50.0/24** (gateway 10.200.50.1)
 | Wazuh Dashboard  | wazuh-dashboard  | 10.200.50.12  | https://localhost                 | `admin` / `SecretPassword`              |
 | OpenVAS          | openvas          | 10.200.50.20  | http://localhost:9392             | `admin` / `OpenVAS@2026!`               |
 | Metasploitable 2 | metasploitable2  | 10.200.50.30  | — (só interno, de propósito)      | `analista` / `Lab@2026!` · `msfadmin` / `msfadmin` |
+| Metasploitable 3 (Linux) | metasploitable3 | 10.200.50.31 | — (só interno, de propósito) | `analista` / `Lab@2026!` · `msfadmin` / `msfadmin` |
 | Nginx            | nginx            | 10.200.50.40  | http://localhost:8080             | `analista` / `Lab@2026!`                |
 | Rocky Linux 9    | rocky            | 10.200.50.50  | `ssh -p 2221 analista@localhost`  | `analista` / `Lab@2026!`                |
 | Debian 12        | debian           | 10.200.50.51  | `ssh -p 2222 analista@localhost`  | `analista` / `Lab@2026!`                |
 | Ubuntu 24.04     | ubuntu           | 10.200.50.52  | `ssh -p 2223 analista@localhost`  | `analista` / `Lab@2026!`                |
 
-**root** em Rocky, Debian, Ubuntu, Nginx e Metasploitable: `Root@2026!`
+**root** em Rocky, Debian, Ubuntu, Nginx, Metasploitable 2 e 3: `Root@2026!`
 O usuário `analista` tem `sudo` (grupo `wheel` no Rocky, `sudo` no Debian/Ubuntu).
 Todas as credenciais ficam no arquivo `.env` (criado a partir de `.env.example`, fora do git) — **troque antes de subir**.
 
@@ -27,30 +28,30 @@ Todas as credenciais ficam no arquivo `.env` (criado a partir de `.env.example`,
   echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf
   ```
 
-## Erro "Pool overlaps with other one on this address space"
-A sub-rede já está em uso (outra rede Docker, VPN ou LAN). Veja o que está ocupado:
+## Subindo (recomendado)
 ```bash
-docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}'
-ip route
+./up.sh            # checa a rede, cria .env, gera certificados e sobe tudo
+./up.sh --check    # só verifica se a sub-rede está livre e mostra os IPs
 ```
-Troque `LAB_NET` no `.env` por uma faixa livre e rode `docker compose up -d` de novo.
-Para remover redes Docker antigas sem uso: `docker network prune`.
+O Docker **não** procura uma faixa livre quando a sub-rede é fixa — ele só
+falha com `Pool overlaps with other one on this address space`. O `up.sh`
+compara `LAB_NET` com todas as redes Docker e com as rotas do host (LAN, VPN)
+e, se houver conflito, escolhe uma faixa livre e grava no `.env`.
 
-## Subindo
+## Subindo manualmente
 ```bash
-# 0) Criar o arquivo de credenciais (e trocar as senhas)
-cp .env.example .env
-
-# 1) Gerar certificados do Wazuh (apenas na primeira vez)
+cp .env.example .env      # troque as senhas
+sudo sysctl -w vm.max_map_count=262144
 docker compose -f generate-indexer-certs.yml run --rm generator
-
-# 2) Build das imagens e subida
 docker compose up -d --build
-
-# 3) Acompanhar
-docker compose ps
-docker compose logs -f openvas      # 1ª sincronização de feeds pode levar 30+ min
 ```
+
+## Metasploitable 3 (Linux)
+O projeto oficial ([rapid7/metasploitable3](https://github.com/rapid7/metasploitable3))
+é distribuído como VM (Vagrant/Packer). Aqui usamos a imagem Docker da
+comunidade `kirscht/metasploitable3-ub1404`, com todos os serviços ligados:
+CUPS, ProFTPD, Apache, UnrealIRCd, Samba, SSH e MySQL. A versão Windows
+(Server 2008) não roda em container — só como VM.
 
 ## Testes rápidos
 ```bash
