@@ -1,0 +1,6 @@
+# Credenciais locais (copie de .env.example)
+.env
+
+# Certificados gerados pelo wazuh-certs-generator
+config/wazuh_indexer_ssl_certs/*
+!config/wazuh_indexer_ssl_certs/.gitkeep

@@ -1,0 +1,20 @@
+---
+# Hashes bcrypt das senhas definidas no .env
+#   admin        -> SecretPassword
+#   kibanaserver -> kibanaserver
+# Para trocar: gere o hash e substitua aqui (veja README.md)
+_meta:
+  type: "internalusers"
+  config_version: 2
+
+admin:
+  hash: "$2y$12$9XeF0XZdKdSIV9c2LQg3Z.O2oGoHLYnLY9ejqq8UQcTBydG214H4O"
+  reserved: true
+  backend_roles:
+    - "admin"
+  description: "Admin do Wazuh Indexer / Dashboard"
+
+kibanaserver:
+  hash: "$2y$12$JWvRQxJjlsoALZMcGrE0FuWlY9XtBQDXjHXkdJQPlz1W5aibvAKQ6"
+  reserved: true
+  description: "Usuario interno do Wazuh Dashboard"

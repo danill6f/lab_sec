@@ -1,0 +1,256 @@
+# ==================================================================
+#  LAB DE SEGURANÇA — Wazuh | OpenVAS | Metasploitable2 | Nginx
+#                     Rocky Linux | Debian | Ubuntu
+#  Rede: lab_net  ${LAB_NET}.0/24  (definida no .env)
+# ==================================================================
+name: lab-seguranca
+
+networks:
+  lab_net:
+    name: lab_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${LAB_NET}.0/24
+          gateway: ${LAB_NET}.1
+
+volumes:
+  wazuh_api_configuration:
+  wazuh_etc:
+  wazuh_logs:
+  wazuh_queue:
+  wazuh_var_multigroups:
+  wazuh_integrations:
+  wazuh_active_response:
+  wazuh_agentless:
+  wazuh_wodles:
+  filebeat_etc:
+  filebeat_var:
+  wazuh-indexer-data:
+  wazuh-dashboard-config:
+  wazuh-dashboard-custom:
+  openvas_data:
+
+services:
+
+  # ----------------------------------------------------------------
+  #  WAZUH (SIEM/XDR) — manager + indexer + dashboard
+  # ----------------------------------------------------------------
+  wazuh.manager:
+    image: wazuh/wazuh-manager:${WAZUH_VERSION}
+    container_name: wazuh-manager
+    hostname: wazuh.manager
+    restart: unless-stopped
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 655360, hard: 655360 }
+    ports:
+      - "1514:1514"        # agentes (eventos)
+      - "1515:1515"        # registro de agentes
+      - "514:514/udp"      # syslog
+      - "55000:55000"      # API
+    environment:
+      - INDEXER_URL=https://wazuh.indexer:9200
+      - INDEXER_USERNAME=${INDEXER_USERNAME}
+      - INDEXER_PASSWORD=${INDEXER_PASSWORD}
+      - FILEBEAT_SSL_VERIFICATION_MODE=full
+      - SSL_CERTIFICATE_AUTHORITIES=/etc/ssl/root-ca.pem
+      - SSL_CERTIFICATE=/etc/ssl/filebeat.pem
+      - SSL_KEY=/etc/ssl/filebeat.key
+      - API_USERNAME=${API_USERNAME}
+      - API_PASSWORD=${API_PASSWORD}
+    volumes:
+      - wazuh_api_configuration:/var/ossec/api/configuration
+      - wazuh_etc:/var/ossec/etc
+      - wazuh_logs:/var/ossec/logs
+      - wazuh_queue:/var/ossec/queue
+      - wazuh_var_multigroups:/var/ossec/var/multigroups
+      - wazuh_integrations:/var/ossec/integrations
+      - wazuh_active_response:/var/ossec/active-response/bin
+      - wazuh_agentless:/var/ossec/agentless
+      - wazuh_wodles:/var/ossec/wodles
+      - filebeat_etc:/etc/filebeat
+      - filebeat_var:/var/lib/filebeat
+      - ./config/wazuh_indexer_ssl_certs/root-ca-manager.pem:/etc/ssl/root-ca.pem
+      - ./config/wazuh_indexer_ssl_certs/wazuh.manager.pem:/etc/ssl/filebeat.pem
+      - ./config/wazuh_indexer_ssl_certs/wazuh.manager-key.pem:/etc/ssl/filebeat.key
+    networks:
+      lab_net:
+        ipv4_address: ${LAB_NET}.10
+
+  wazuh.indexer:
+    image: wazuh/wazuh-indexer:${WAZUH_VERSION}
+    container_name: wazuh-indexer
+    hostname: wazuh.indexer
+    restart: unless-stopped
+    environment:
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    volumes:
+      - wazuh-indexer-data:/var/lib/wazuh-indexer
+      - ./config/wazuh_indexer_ssl_certs/root-ca.pem:/usr/share/wazuh-indexer/certs/root-ca.pem
+      - ./config/wazuh_indexer_ssl_certs/wazuh.indexer-key.pem:/usr/share/wazuh-indexer/certs/wazuh.indexer.key
+      - ./config/wazuh_indexer_ssl_certs/wazuh.indexer.pem:/usr/share/wazuh-indexer/certs/wazuh.indexer.pem
+      - ./config/wazuh_indexer_ssl_certs/admin.pem:/usr/share/wazuh-indexer/certs/admin.pem
+      - ./config/wazuh_indexer_ssl_certs/admin-key.pem:/usr/share/wazuh-indexer/certs/admin-key.pem
+      - ./config/wazuh_indexer/wazuh.indexer.yml:/usr/share/wazuh-indexer/opensearch.yml
+      - ./config/wazuh_indexer/internal_users.yml:/usr/share/wazuh-indexer/opensearch-security/internal_users.yml
+    networks:
+      lab_net:
+        ipv4_address: ${LAB_NET}.11
+
+  wazuh.dashboard:
+    image: wazuh/wazuh-dashboard:${WAZUH_VERSION}
+    container_name: wazuh-dashboard
+    hostname: wazuh.dashboard
+    restart: unless-stopped
+    ports:
+      - "443:5601"         # https://localhost
+    environment:
+      - INDEXER_USERNAME=${INDEXER_USERNAME}
+      - INDEXER_PASSWORD=${INDEXER_PASSWORD}
+      - WAZUH_API_URL=https://wazuh.manager
+      - DASHBOARD_USERNAME=${DASHBOARD_USERNAME}
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}
+      - API_USERNAME=${API_USERNAME}
+      - API_PASSWORD=${API_PASSWORD}
+    volumes:
+      - ./config/wazuh_indexer_ssl_certs/wazuh.dashboard.pem:/usr/share/wazuh-dashboard/certs/wazuh-dashboard.pem
+      - ./config/wazuh_indexer_ssl_certs/wazuh.dashboard-key.pem:/usr/share/wazuh-dashboard/certs/wazuh-dashboard-key.pem
+      - ./config/wazuh_indexer_ssl_certs/root-ca.pem:/usr/share/wazuh-dashboard/certs/root-ca.pem
+      - ./config/wazuh_dashboard/opensearch_dashboards.yml:/usr/share/wazuh-dashboard/config/opensearch_dashboards.yml
+      - ./config/wazuh_dashboard/wazuh.yml:/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml
+      - wazuh-dashboard-config:/usr/share/wazuh-dashboard/data/wazuh/config
+      - wazuh-dashboard-custom:/usr/share/wazuh-dashboard/plugins/wazuh/public/assets/custom
+    depends_on:
+      - wazuh.indexer
+      - wazuh.manager
+    networks:
+      lab_net:
+        ipv4_address: ${LAB_NET}.12
+
+  # ----------------------------------------------------------------
+  #  OPENVAS / GREENBONE (scanner de vulnerabilidades)
+  #  1ª subida demora (sincroniza feeds NVT/SCAP/CERT)
+  # ----------------------------------------------------------------
+  openvas:
+    image: immauss/openvas:latest
+    container_name: openvas
+    hostname: openvas
+    restart: unless-stopped
+    ports:
+      - "9392:9392"        # http://localhost:9392
+    environment:
+      - USERNAME=${OPENVAS_USER}
+      - PASSWORD=${OPENVAS_PASS}
+      - RELAYHOST=${LAB_NET}.1
+      - SMTPPORT=25
+      - REDISDBS=512
+      - QUIET=false
+      - NEWDB=false
+      - SKIPSYNC=false
+      - TZ=America/Sao_Paulo
+    volumes:
+      - openvas_data:/data
+    networks:
+      lab_net:
+        ipv4_address: ${LAB_NET}.20
+
+  # ----------------------------------------------------------------
+  #  METASPLOITABLE 2 (alvo vulnerável) — SEM portas publicadas:
+  #  acessível apenas de dentro da lab_net
+  # ----------------------------------------------------------------
+  metasploitable2:
+    image: tleemcjr/metasploitable2:latest
+    container_name: metasploitable2
+    hostname: metasploitable2
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+    command: >
+      sh -c "echo 'root:${ROOT_PASS}' | chpasswd;
+             id ${LAB_USER} >/dev/null 2>&1 || useradd -m -s /bin/bash ${LAB_USER};
+             echo '${LAB_USER}:${LAB_PASS}' | chpasswd;
+             /bin/services.sh;
+             tail -f /dev/null"
+    networks:
+      lab_net:
+        ipv4_address: ${LAB_NET}.30
+
+  # ----------------------------------------------------------------
+  #  NGINX (servidor web)
+  # ----------------------------------------------------------------
+  nginx:
+    build:
+      context: ./nginx
+      args:
+        LAB_USER: ${LAB_USER}
+        LAB_PASS: ${LAB_PASS}
+        ROOT_PASS: ${ROOT_PASS}
+    image: lab/nginx:latest
+    container_name: nginx
+    hostname: nginx
+    restart: unless-stopped
+    ports:
+      - "8080:80"          # http://localhost:8080
+    volumes:
+      - ./nginx/html:/usr/share/nginx/html:ro
+    networks:
+      lab_net:
+        ipv4_address: ${LAB_NET}.40
+
+  # ----------------------------------------------------------------
+  #  SERVIDORES LINUX (SSH habilitado)
+  # ----------------------------------------------------------------
+  rocky:
+    build:
+      context: ./hosts/rocky
+      args:
+        LAB_USER: ${LAB_USER}
+        LAB_PASS: ${LAB_PASS}
+        ROOT_PASS: ${ROOT_PASS}
+    image: lab/rocky:9
+    container_name: rocky
+    hostname: rocky
+    restart: unless-stopped
+    ports:
+      - "2221:22"          # ssh -p 2221 analista@localhost
+    networks:
+      lab_net:
+        ipv4_address: ${LAB_NET}.50
+
+  debian:
+    build:
+      context: ./hosts/debian
+      args:
+        LAB_USER: ${LAB_USER}
+        LAB_PASS: ${LAB_PASS}
+        ROOT_PASS: ${ROOT_PASS}
+    image: lab/debian:12
+    container_name: debian
+    hostname: debian
+    restart: unless-stopped
+    ports:
+      - "2222:22"          # ssh -p 2222 analista@localhost
+    networks:
+      lab_net:
+        ipv4_address: ${LAB_NET}.51
+
+  ubuntu:
+    build:
+      context: ./hosts/ubuntu
+      args:
+        LAB_USER: ${LAB_USER}
+        LAB_PASS: ${LAB_PASS}
+        ROOT_PASS: ${ROOT_PASS}
+    image: lab/ubuntu:24.04
+    container_name: ubuntu
+    hostname: ubuntu
+    restart: unless-stopped
+    ports:
+      - "2223:22"          # ssh -p 2223 analista@localhost
+    networks:
+      lab_net:
+        ipv4_address: ${LAB_NET}.52
