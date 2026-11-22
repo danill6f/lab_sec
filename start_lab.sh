@@ -3,11 +3,11 @@
 #  start_lab.sh — configura e sobe o Lab de Segurança
 #
 #  ./start_lab.sh             modo interativo: sugere a rede (você pode
-#                             trocar), pergunta usuário e senhas, preenche
+#                             trocar), checa portas, pergunta senhas, preenche
 #                             o .env e pede confirmação antes de subir
 #  ./start_lab.sh --default   modo automático: escolhe rede livre, gera
 #                             senhas fortes e só pede a confirmação final
-#  ./start_lab.sh --check     só mostra a rede sugerida e os IPs
+#  ./start_lab.sh --check     só mostra a rede, as portas e os IPs
 #
 #  Em qualquer modo, se já existir um .env, os valores atuais são
 #  reaproveitados como padrão (nada é sobrescrito sem você confirmar).
@@ -187,6 +187,68 @@ set_indexer_hash() {   # set_indexer_hash usuario hash  (edita a cópia local)
 }
 
 # ------------------------------------------------------------------
+#  0) O lab (ou algo com os mesmos nomes) já está no ar?
+# ------------------------------------------------------------------
+LAB_CONTAINERS=(wazuh-manager wazuh-indexer wazuh-dashboard openvas metasploitable2
+                metasploitable3 nginx rocky debian ubuntu)
+
+check_running_lab() {
+  local name_re ours=() others=() line proj name state
+  name_re="^/?($(IFS='|'; echo "${LAB_CONTAINERS[*]}"))$"
+  while IFS='|' read -r proj name state; do
+    if [[ "$proj" == "$PROJECT" ]]; then ours+=("$name|$state")
+    elif [[ "$name" =~ $name_re ]]; then others+=("$name|$state|${proj:-sem projeto}")
+    fi
+  done < <(docker ps -a --format '{{.Label "com.docker.compose.project"}}|{{.Names}}|{{.State}}')
+
+  (( ${#ours[@]} + ${#others[@]} == 0 )) && { ok "Nenhum container do lab no ar."; return 0; }
+
+  if (( ${#ours[@]} )); then
+    warn "O lab já tem containers criados:"
+    for line in "${ours[@]}"; do printf '      %-18s %s\n' "${line%%|*}" "${line#*|}"; done
+  fi
+  if (( ${#others[@]} )); then
+    warn "Containers de OUTROS projetos com os mesmos nomes do lab (vão conflitar):"
+    for line in "${others[@]}"; do
+      IFS='|' read -r name state proj <<<"$line"
+      printf '      %-18s %-10s projeto: %s\n' "$name" "$state" "$proj"
+    done
+  fi
+
+  echo
+  echo "  [d] derrubar o lab (mantém os dados: Wazuh, feeds do OpenVAS)"
+  echo "  [v] derrubar e APAGAR os volumes (recomeça do zero)"
+  echo "  [c] cancelar"
+  local opt
+  while :; do
+    read -rp "  O que deseja fazer? [d/v/C]: " opt || true
+    case "${opt:-c}" in
+      d|D) docker compose -p "$PROJECT" down --remove-orphans; break ;;
+      v|V) read -rp "  Confirma apagar TODOS os dados do lab? digite 'apagar': " c2 || true
+           [[ "$c2" == "apagar" ]] || { warn "Não confirmado."; continue; }
+           docker compose -p "$PROJECT" down -v --remove-orphans; break ;;
+      c|C) info "Cancelado. Nada foi alterado."; exit 0 ;;
+      *)   warn "Opção inválida." ;;
+    esac
+  done
+
+  if (( ${#others[@]} )); then
+    for line in "${others[@]}"; do
+      IFS='|' read -r name state proj <<<"$line"
+      read -rp "  Remover '$name' do projeto '$proj'? (necessário para subir o lab) [s/N]: " c3 || true
+      if [[ "$c3" =~ ^[SsYy]$ ]]; then docker rm -f "$name" >/dev/null && ok "$name removido"
+      else fail "'$name' continua existindo — o lab não pode subir. Remova/renomeie e rode de novo."; fi
+    done
+  fi
+  ok "Ambiente liberado."
+}
+
+if [[ "$MODE" != "check" ]]; then
+  title "Lab já em execução?"
+  check_running_lab
+fi
+
+# ------------------------------------------------------------------
 #  1) Rede
 # ------------------------------------------------------------------
 title "Rede do laboratório"
@@ -224,6 +286,89 @@ else
   fi
 fi
 
+# ------------------------------------------------------------------
+#  1b) Portas publicadas no host
+# ------------------------------------------------------------------
+PORT_VARS=(WAZUH_DASHBOARD_PORT OPENVAS_PORT NGINX_PORT SSH_ROCKY_PORT SSH_DEBIAN_PORT
+           SSH_UBUNTU_PORT WAZUH_API_PORT WAZUH_AGENT_PORT WAZUH_ENROLL_PORT WAZUH_SYSLOG_PORT)
+declare -A PORT_DEFAULT=( [WAZUH_DASHBOARD_PORT]=443 [OPENVAS_PORT]=9392 [NGINX_PORT]=8080
+  [SSH_ROCKY_PORT]=2221 [SSH_DEBIAN_PORT]=2222 [SSH_UBUNTU_PORT]=2223 [WAZUH_API_PORT]=55000
+  [WAZUH_AGENT_PORT]=1514 [WAZUH_ENROLL_PORT]=1515 [WAZUH_SYSLOG_PORT]=514 )
+declare -A PORT_ALT=( [WAZUH_DASHBOARD_PORT]=8443 [NGINX_PORT]=8081 [OPENVAS_PORT]=9393
+  [SSH_ROCKY_PORT]=2231 [SSH_DEBIAN_PORT]=2232 [SSH_UBUNTU_PORT]=2233 [WAZUH_API_PORT]=55001
+  [WAZUH_AGENT_PORT]=11514 [WAZUH_ENROLL_PORT]=11515 [WAZUH_SYSLOG_PORT]=10514 )
+declare -A PORT_DESC=( [WAZUH_DASHBOARD_PORT]="Wazuh dashboard (https)" [OPENVAS_PORT]="OpenVAS web"
+  [NGINX_PORT]="Nginx http" [SSH_ROCKY_PORT]="SSH Rocky" [SSH_DEBIAN_PORT]="SSH Debian"
+  [SSH_UBUNTU_PORT]="SSH Ubuntu" [WAZUH_API_PORT]="Wazuh API" [WAZUH_AGENT_PORT]="Wazuh agentes"
+  [WAZUH_ENROLL_PORT]="Wazuh registro agentes" [WAZUH_SYSLOG_PORT]="Wazuh syslog" )
+proto_of() { [[ "$1" == WAZUH_SYSLOG_PORT ]] && echo udp || echo tcp; }
+
+declare -A BUSY=() OWN=() CHOSEN=()
+collect_ports() {   # BUSY["porta/proto"]=dono  (ignora containers deste lab)
+  local proj name ports m hp proto a b p netid addr
+  while IFS='|' read -r proj name ports; do
+    [[ -z "$ports" ]] && continue
+    for m in $(grep -oE '[0-9]+(-[0-9]+)?->[0-9]+(-[0-9]+)?/(tcp|udp)' <<<"$ports"); do
+      hp=${m%%->*}; proto=${m##*/}; a=${hp%-*}; b=${hp#*-}
+      for (( p=a; p<=b; p++ )); do
+        if [[ "$proj" == "$PROJECT" ]]; then OWN["$p/$proto"]=1
+        else BUSY["$p/$proto"]="container $name${proj:+ (projeto $proj)}"; fi
+      done
+    done
+  done < <(docker ps --format '{{.Label "com.docker.compose.project"}}|{{.Names}}|{{.Ports}}')
+  if command -v ss >/dev/null; then
+    while read -r netid addr; do
+      p=${addr##*:}; [[ "$p" =~ ^[0-9]+$ ]] || continue
+      [[ -n "${OWN[$p/$netid]:-}" || -n "${BUSY[$p/$netid]:-}" ]] && continue
+      BUSY["$p/$netid"]="outro processo do host"
+    done < <(ss -Htlnu 2>/dev/null | awk '{print $1, $5}')
+  fi
+}
+
+port_problem() {   # port_problem VAR porta -> imprime motivo se não puder usar
+  local var=$1 p=$2 proto v; proto=$(proto_of "$var")
+  [[ "$p" =~ ^[0-9]+$ ]] && (( p >= 1 && p <= 65535 )) || { echo "porta inválida"; return 0; }
+  [[ -n "${BUSY[$p/$proto]:-}" ]] && { echo "em uso por ${BUSY[$p/$proto]}"; return 0; }
+  for v in "${!CHOSEN[@]}"; do
+    [[ "$v" != "$var" && "${CHOSEN[$v]}" == "$p" && "$(proto_of "$v")" == "$proto" ]] && { echo "já escolhida para ${PORT_DESC[$v]}"; return 0; }
+  done
+  return 1
+}
+
+free_port_from() {   # free_port_from VAR inicio
+  local var=$1 p=$2
+  while port_problem "$var" "$p" >/dev/null; do p=$((p + 1)); (( p > 65535 )) && p=1025; done
+  echo "$p"
+}
+
+title "Portas no host"
+collect_ports
+for v in "${PORT_VARS[@]}"; do cur=$(env_get "$v"); CHOSEN[$v]=${cur:-${PORT_DEFAULT[$v]}}; done
+PORT_CONFLICTS=0
+for v in "${PORT_VARS[@]}"; do
+  p=${CHOSEN[$v]}; proto=$(proto_of "$v")
+  if why=$(port_problem "$v" "$p"); then
+    PORT_CONFLICTS=$((PORT_CONFLICTS + 1))
+    sug=$(free_port_from "$v" "${PORT_ALT[$v]}")
+    warn "$(printf '%-24s %5s/%s  %s' "${PORT_DESC[$v]}" "$p" "$proto" "$why")"
+    if [[ "$MODE" == "interactive" ]]; then
+      np=""
+      while :; do
+        ask np "  Nova porta para ${PORT_DESC[$v]}" "$sug"
+        if why=$(port_problem "$v" "$np"); then warn "Porta $np: $why"; continue; fi
+        break
+      done
+      CHOSEN[$v]=$np
+    else
+      CHOSEN[$v]=$sug
+    fi
+    ok "$(printf '%-24s -> %s/%s' "${PORT_DESC[$v]}" "${CHOSEN[$v]}" "$proto")"
+  fi
+done
+(( PORT_CONFLICTS == 0 )) && ok "Todas as portas do lab estão livres."
+for v in "${PORT_VARS[@]}"; do printf -v "$v" '%s' "${CHOSEN[$v]}"; done
+DASH_URL="https://localhost"; [[ "$WAZUH_DASHBOARD_PORT" != 443 ]] && DASH_URL="https://localhost:${WAZUH_DASHBOARD_PORT}"
+
 if [[ "$MODE" == "check" ]]; then
   printf '\n  IPs do lab em %s.0/24:\n' "$LAB_NET"
   printf '   %-18s %s\n' \
@@ -231,6 +376,8 @@ if [[ "$MODE" == "check" ]]; then
     wazuh-dashboard "${LAB_NET}.12" openvas "${LAB_NET}.20" \
     metasploitable2 "${LAB_NET}.30" metasploitable3 "${LAB_NET}.31" \
     nginx "${LAB_NET}.40" rocky "${LAB_NET}.50" debian "${LAB_NET}.51" ubuntu "${LAB_NET}.52"
+  printf '\n  Portas no host:\n'
+  for v in "${PORT_VARS[@]}"; do printf '   %-24s %s/%s\n' "${PORT_DESC[$v]}" "${!v}" "$(proto_of "$v")"; done
   exit 0
 fi
 
@@ -273,16 +420,16 @@ cat <<EOF
   Rede            ${LAB_NET}.0/24  (gateway ${LAB_NET}.1)
 
   Serviço            IP               Acesso pelo host
-  wazuh-manager      ${LAB_NET}.10     1514, 1515, 514/udp, 55000
+  wazuh-manager      ${LAB_NET}.10     ${WAZUH_AGENT_PORT}, ${WAZUH_ENROLL_PORT}, ${WAZUH_SYSLOG_PORT}/udp, ${WAZUH_API_PORT}
   wazuh-indexer      ${LAB_NET}.11     (interno)
-  wazuh-dashboard    ${LAB_NET}.12     https://localhost
-  openvas            ${LAB_NET}.20     http://localhost:9392
+  wazuh-dashboard    ${LAB_NET}.12     ${DASH_URL}
+  openvas            ${LAB_NET}.20     http://localhost:${OPENVAS_PORT}
   metasploitable2    ${LAB_NET}.30     (interno)
   metasploitable3    ${LAB_NET}.31     (interno)
-  nginx              ${LAB_NET}.40     http://localhost:8080
-  rocky              ${LAB_NET}.50     ssh -p 2221 ${LAB_USER}@localhost
-  debian             ${LAB_NET}.51     ssh -p 2222 ${LAB_USER}@localhost
-  ubuntu             ${LAB_NET}.52     ssh -p 2223 ${LAB_USER}@localhost
+  nginx              ${LAB_NET}.40     http://localhost:${NGINX_PORT}
+  rocky              ${LAB_NET}.50     ssh -p ${SSH_ROCKY_PORT} ${LAB_USER}@localhost
+  debian             ${LAB_NET}.51     ssh -p ${SSH_DEBIAN_PORT} ${LAB_USER}@localhost
+  ubuntu             ${LAB_NET}.52     ssh -p ${SSH_UBUNTU_PORT} ${LAB_USER}@localhost
 
   Credenciais
   Usuário local      ${LAB_USER} / ${LAB_PASS}
@@ -341,6 +488,18 @@ DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}
 API_USERNAME=wazuh-wui
 API_PASSWORD=${API_PASSWORD}
 INDEXER_USERS_FILE=${INDEXER_USERS_FILE}
+
+# Portas publicadas no host
+WAZUH_DASHBOARD_PORT=${WAZUH_DASHBOARD_PORT}
+OPENVAS_PORT=${OPENVAS_PORT}
+NGINX_PORT=${NGINX_PORT}
+SSH_ROCKY_PORT=${SSH_ROCKY_PORT}
+SSH_DEBIAN_PORT=${SSH_DEBIAN_PORT}
+SSH_UBUNTU_PORT=${SSH_UBUNTU_PORT}
+WAZUH_API_PORT=${WAZUH_API_PORT}
+WAZUH_AGENT_PORT=${WAZUH_AGENT_PORT}
+WAZUH_ENROLL_PORT=${WAZUH_ENROLL_PORT}
+WAZUH_SYSLOG_PORT=${WAZUH_SYSLOG_PORT}
 EOF
 umask 022
 if [[ -f "$ENV_FILE.bak" ]]; then ok ".env gravado (o anterior ficou em .env.bak)"; else ok ".env gravado"; fi
@@ -367,4 +526,5 @@ fi
 docker compose up -d --build
 echo
 ok "Lab no ar em ${LAB_NET}.0/24 — status: docker compose ps"
+info "Wazuh: ${DASH_URL}   OpenVAS: http://localhost:${OPENVAS_PORT}   Nginx: http://localhost:${NGINX_PORT}"
 info "O OpenVAS pode levar 30+ min na primeira subida (sincronizando feeds)."

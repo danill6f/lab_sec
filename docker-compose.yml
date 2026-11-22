@@ -45,10 +45,10 @@ services:
       memlock: { soft: -1, hard: -1 }
       nofile: { soft: 655360, hard: 655360 }
     ports:
-      - "1514:1514"        # agentes (eventos)
-      - "1515:1515"        # registro de agentes
-      - "514:514/udp"      # syslog
-      - "55000:55000"      # API
+      - "${WAZUH_AGENT_PORT:-1514}:1514"        # agentes (eventos)
+      - "${WAZUH_ENROLL_PORT:-1515}:1515"        # registro de agentes
+      - "${WAZUH_SYSLOG_PORT:-514}:514/udp"      # syslog
+      - "${WAZUH_API_PORT:-55000}:55000"      # API
     environment:
       - INDEXER_URL=https://wazuh.indexer:9200
       - INDEXER_USERNAME=${INDEXER_USERNAME}
@@ -107,7 +107,7 @@ services:
     hostname: wazuh.dashboard
     restart: unless-stopped
     ports:
-      - "443:5601"         # https://localhost
+      - "${WAZUH_DASHBOARD_PORT:-443}:5601"   # https://localhost
     environment:
       - INDEXER_USERNAME=${INDEXER_USERNAME}
       - INDEXER_PASSWORD=${INDEXER_PASSWORD}
@@ -141,7 +141,7 @@ services:
     hostname: openvas
     restart: unless-stopped
     ports:
-      - "9392:9392"        # http://localhost:9392
+      - "${OPENVAS_PORT:-9392}:9392"
     environment:
       - USERNAME=${OPENVAS_USER}
       - PASSWORD=${OPENVAS_PASS}
@@ -222,7 +222,7 @@ services:
     hostname: nginx
     restart: unless-stopped
     ports:
-      - "8080:80"          # http://localhost:8080
+      - "${NGINX_PORT:-8080}:80"
     volumes:
       - ./nginx/html:/usr/share/nginx/html:ro
     networks:
@@ -244,7 +244,7 @@ services:
     hostname: rocky
     restart: unless-stopped
     ports:
-      - "2221:22"          # ssh -p 2221 analista@localhost
+      - "${SSH_ROCKY_PORT:-2221}:22"
     networks:
       lab_net:
         ipv4_address: ${LAB_NET}.50
@@ -261,7 +261,7 @@ services:
     hostname: debian
     restart: unless-stopped
     ports:
-      - "2222:22"          # ssh -p 2222 analista@localhost
+      - "${SSH_DEBIAN_PORT:-2222}:22"
     networks:
       lab_net:
         ipv4_address: ${LAB_NET}.51
@@ -278,7 +278,7 @@ services:
     hostname: ubuntu
     restart: unless-stopped
     ports:
-      - "2223:22"          # ssh -p 2223 analista@localhost
+      - "${SSH_UBUNTU_PORT:-2223}:22"
     networks:
       lab_net:
         ipv4_address: ${LAB_NET}.52

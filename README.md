@@ -2,6 +2,8 @@
 
 Rede `lab_net` → **10.200.50.0/24** por padrão (gateway .1). O `./start_lab.sh` sugere uma faixa livre automaticamente.
 
+> Portas abaixo são os padrões; o `start_lab.sh` pode trocá-las se estiverem ocupadas (veja o resumo ou o `.env`).
+
 | Serviço          | Container        | IP           | Acesso pelo host                  | Login                                   |
 |------------------|------------------|--------------|-----------------------------------|-----------------------------------------|
 | Wazuh Manager    | wazuh-manager    | 10.200.50.10  | 1514, 1515, 514/udp, 55000 (API)  | API: `wazuh-wui` / `MyS3cr37P450r.*-`   |
@@ -34,6 +36,15 @@ Todas as credenciais ficam no arquivo `.env` (criado pelo `start_lab.sh` ou copi
 ./start_lab.sh --default   # automático: só confirma no final
 ./start_lab.sh --check     # só mostra a rede sugerida e os IPs
 ```
+
+**Antes de tudo**, o script verifica se o lab já está no ar (ou se há containers
+de outros projetos com os mesmos nomes) e pergunta: **[d]** derrubar mantendo os
+dados, **[v]** derrubar apagando os volumes, ou **[c]** cancelar.
+
+Também verifica as **portas do host** (443, 9392, 8080, 2221-2223, 1514, 1515,
+514/udp, 55000): se alguma estiver em uso, mostra quem usa (container/projeto
+ou processo do host) e sugere outra — no interativo você pode digitar a sua.
+As portas escolhidas ficam no `.env` e aparecem no resumo final.
 
 **Interativo** — o script:
 1. lista as faixas já em uso (redes Docker + rotas do host: LAN, VPN…)
